@@ -38,6 +38,24 @@
 
 ---
 
+## 核心技術要求 (Core Technical Requirements)
+
+本專題涵蓋以下兩項核心技術之具體應用，並將兩者緊密結合：
+
+### Large Language Models (LLMs)
+
+- **Prompt Engineering** — 設計結構化的 System / User Prompt 模板（Mega-Prompt），包含角色注入、世界觀、劇情指令、輸出格式規範等區塊，引導 LLM 產出 `<story>`、`<options>`、`<visual_prompt>` 三區塊結構化輸出
+- **API 呼叫與本機開源模型推論** — 透過 `LLMProvider` 抽象層，同一介面支援 OpenAI API（GPT-4o-mini）與本地 GGUF 模型（llama-cpp-python / Qwen2.5），切換僅需修改環境變數
+- **RAG 架構** — 每回合從 Session 歷史中檢索前輪選擇與敘事摘要，動態組裝至 User Prompt，讓 LLM 能參考上下文生成連貫劇情
+
+### Diffusion / Flow Matching Models
+
+- **影像生成與 Pipeline 客製化** — 基於 Diffusers + SDXL-Turbo 建構 `BigPicklePipeline`，整合 Scene Compiler（場景標籤→英文繪圖 Prompt）、Style Controller（大陸名稱→美術風格映射）、Guidance Scheduler（CFG scale 動態排程）與 LRU Image Cache
+- **LoRA 權重掛載** — 支援透過 `lora/` 目錄掛載自訂 LoRA 權重，調整生成風格（如哥德廢土、蒸氣龐克等）
+- **推論加速** — 採用 SDXL-Turbo（4-step inference）降低延遲，並實作 mock 模式（無 GPU 時以 Pillow 產生佔位圖），確保開發環境可順暢執行
+
+---
+
 ## Core Features
 
 - **LLM 驅動敘事** — 支援 OpenAI API（GPT-4o-mini）與本地 GGUF 模型（llama-cpp-python / Qwen2.5），temperature、repetition penalty 等超參可調
