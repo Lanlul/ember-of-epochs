@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import AsyncGenerator, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import gradio as gr
 
@@ -64,13 +64,14 @@ async def start_game(
 
     resp = await _gm.new_game(player_name.strip())
 
-    choice_labels = [c.text for c in resp.choices]
-    choice_ids = [c.id for c in resp.choices]
+    choice_labels = [c.text for c in resp.choices if c.text]
+    choice_ids = [c.id for c in resp.choices if c.text]
     _update_choice_id_map(choice_labels, choice_ids)
+    has_choices = len(choice_labels) > 0
 
     world = resp.world_state
     status = (
-        f"回合 1 | Stage 1　"
+        f"序幕 | Stage 1　"
         f"🌍 {world.continent}　"
         f"秩序 {world.alignment.order}　混沌 {world.alignment.chaos}　"
         f"科技 {world.alignment.technology}　自然 {world.alignment.nature}"
@@ -78,45 +79,26 @@ async def start_game(
 
     return (
         resp.narrative,
-        gr.update(choices=choice_labels, value=None, visible=True),
+        gr.update(choices=choice_labels, value=None, visible=has_choices),
         _resolve_image(resp.image_url),
         status,
         resp.session_id,
         gr.update(visible=False),
         gr.update(visible=True),
         player_name.strip(),
-        gr.update(visible=True),
-        "",
-        _resolve_image(resp.image_url),
-        gr.update(visible=False),
+        gr.update(visible=has_choices),
     )
 
 
 async def make_choice(
     choice_label: str,
     session_id: str,
-) -> AsyncGenerator[Tuple, None]:
+) -> Tuple:
     if not choice_label or not session_id:
         raise gr.Error("請先選擇一個選項")
 
     choice_id_map = _get_choice_id_map()
     choice_id = choice_id_map.get(choice_label, "")
-
-    # ── Loading state: just hide choices, keep everything else ──
-    yield (
-        gr.update(),
-        gr.update(visible=False),
-        gr.update(),
-        gr.update(),
-        session_id,
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(visible=False),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-    )
 
     try:
         final_resp = await _gm.process_action(session_id, choice_id)
@@ -126,10 +108,19 @@ async def make_choice(
 
     # ── Handle ending ──
     if final_resp.is_ending:
-        ending_resp = await _gm.resolve_ending(session_id)
+        logger.warning("Ending triggered for session %s", session_id)
+        try:
+            ending_resp = await _gm.resolve_ending(session_id)
+        except Exception as exc:
+            logger.error("Ending resolution failed: %s", exc)
+            raise gr.Error(f"結局生成失敗：{exc}")
         ending = ending_resp.ending
         epilogue = ending_resp.epilogue
         chronicle = ending_resp.chronicle
+        logger.warning(
+            "Ending data: title=%s, epilogue_len=%d, actions=%d",
+            ending.title, len(epilogue), chronicle.journey.get("total_actions", 0),
+        )
 
         text = (
             f"## ✦ {ending.title} ─ {ending.subtitle}\n\n"
@@ -147,26 +138,27 @@ async def make_choice(
             for d in chronicle.key_decisions:
                 text += f"- 第 {d['chapter']} 章：{d['decision']}\n"
 
-        yield (
-            text,
+        return (
+            gr.update(value=text),
             gr.update(choices=[], visible=False),
-            _resolve_image(ending_resp.image_url),
-            "",
+            gr.update(value=_resolve_image(ending_resp.image_url)),
+            gr.update(value=""),
             session_id,
             gr.update(visible=False),
-            gr.update(visible=False),
-            "",
-            gr.update(visible=False),
-            text,
-            _resolve_image(ending_resp.image_url),
             gr.update(visible=True),
+            gr.update(value=""),
+            gr.update(visible=False),
         )
-        return
 
     # ── Normal turn ──
-    choice_labels = [c.text for c in final_resp.choices]
-    choice_ids = [c.id for c in final_resp.choices]
+    logger.warning(
+        "Normal turn: is_ending=%s, choices_count=%d",
+        final_resp.is_ending, len(final_resp.choices),
+    )
+    choice_labels = [c.text for c in final_resp.choices if c.text]
+    choice_ids = [c.id for c in final_resp.choices if c.text]
     _update_choice_id_map(choice_labels, choice_ids)
+    has_choices = len(choice_labels) > 0
 
     world = final_resp.world_state
     status = (
@@ -176,19 +168,16 @@ async def make_choice(
         f"科技 {world.alignment.technology}　自然 {world.alignment.nature}"
     )
 
-    yield (
+    return (
         final_resp.narrative,
-        gr.update(choices=choice_labels, value=None, visible=True),
+        gr.update(choices=choice_labels, value=None, visible=has_choices),
         _resolve_image(final_resp.image_url),
         status,
         session_id,
         gr.update(visible=False),
         gr.update(visible=True),
         "",
-        gr.update(visible=True),
-        "",
-        _resolve_image(final_resp.image_url),
-        gr.update(visible=False),
+        gr.update(visible=has_choices),
     )
 
 
@@ -216,9 +205,6 @@ async def reset_game():
         gr.update(visible=True),
         gr.update(visible=False),
         "",
-        gr.update(visible=False),
-        "",
-        None,
         gr.update(visible=False),
     )
 
@@ -278,16 +264,6 @@ with gr.Blocks(
         with gr.Row():
             reset_btn = gr.Button("↺ 重新開始", size="sm", scale=0)
 
-    # ── Ending Screen ─────────────────────────────────
-    with gr.Column(visible=False, elem_id="ending-screen") as ending_screen:
-        ending_text = gr.Markdown("")
-        ending_img = gr.Image(
-            label=None,
-            show_label=False,
-            height=400,
-        )
-        restart_btn = gr.Button("↺ 再次啟程", variant="primary", size="lg")
-
     # ── Event Wiring ──────────────────────────────────
 
     start_btn.click(
@@ -303,9 +279,6 @@ with gr.Blocks(
             game_screen,
             player_name_state,
             action_row,
-            ending_text,
-            ending_img,
-            ending_screen,
         ],
     )
 
@@ -322,9 +295,6 @@ with gr.Blocks(
             game_screen,
             player_name_state,
             action_row,
-            ending_text,
-            ending_img,
-            ending_screen,
         ],
     )
 
@@ -341,28 +311,6 @@ with gr.Blocks(
             game_screen,
             player_name_state,
             action_row,
-            ending_text,
-            ending_img,
-            ending_screen,
-        ],
-    )
-
-    restart_btn.click(
-        fn=reset_game,
-        inputs=None,
-        outputs=[
-            narrative,
-            choice_radio,
-            scene_img,
-            world_status,
-            session_id,
-            start_screen,
-            game_screen,
-            player_name_state,
-            action_row,
-            ending_text,
-            ending_img,
-            ending_screen,
         ],
     )
 

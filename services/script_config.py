@@ -247,8 +247,7 @@ def get_continent_for_turn(global_turn: int) -> str:
 
 
 def is_final_stage(global_turn: int) -> bool:
-    chapter, stage, _ = chapter_stage_from_turn(global_turn)
-    return chapter == 3 and stage == 5
+    return global_turn >= total_turns()
 
 
 def is_chapter_boundary(global_turn: int) -> bool:

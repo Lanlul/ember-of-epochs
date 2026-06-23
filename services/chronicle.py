@@ -73,7 +73,11 @@ class ChronicleService:
         user_prompt += "\n請生成終章敘事。"
 
         try:
-            return await self._get_llm().generate(system_prompt, user_prompt)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            return await self._get_llm().generate(messages)
         except Exception as exc:
             logger.warning("Epilogue generation failed: %s", exc)
             return ending.description

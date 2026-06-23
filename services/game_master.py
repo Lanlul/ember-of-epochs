@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, Optional, List
 
 from ..config import settings
-from ..models.action import ActionResponse, EndingResponse, EndingInfo, ChronicleData
+from ..models.action import ActionResponse, EndingResponse, EndingInfo, ChronicleData, LLMOutput
 from ..models.session import Session, Choice
 from ..models.world import Alignment, WorldState, SceneTags
 from .alignment import AlignmentService
@@ -194,7 +194,10 @@ class GameMaster:
 
     def _prepare_turn(self, session: Session, choice_id: str):
         """Shared setup for process_action."""
-        last_choice_text = self._find_last_choice_text(session, choice_id)
+        if not session.history:
+            last_choice_text = self._find_opening_choice_text(choice_id)
+        else:
+            last_choice_text = self._find_last_choice_text(session, choice_id)
 
         current_turn = len(session.history) + 1
         chapter, stage, stage_turn = chapter_stage_from_turn(current_turn)
@@ -226,6 +229,7 @@ class GameMaster:
         self,
         session_id: str,
         choice_id: str,
+        max_retries: int = 2,
     ) -> ActionResponse:
         session = self.get_session(session_id)
         if not session:
@@ -234,8 +238,40 @@ class GameMaster:
         messages, current_turn, chapter, stage, final_stage = self._prepare_turn(
             session, choice_id
         )
-        raw = await self._get_llm().generate(messages)
-        return await self._finalize_turn(session, session_id, choice_id, raw, current_turn, final_stage)
+        logger.warning(
+            "process_action: turn=%d, chapter=%d, stage=%d, final_stage=%s",
+            current_turn, chapter, stage, final_stage,
+        )
+
+        raw = None
+        parsed = None
+        for attempt in range(max_retries + 1):
+            raw = await self._get_llm().generate(messages)
+            parsed = self._parser.parse(raw)
+
+            if parsed.options:
+                for i, opt in enumerate(parsed.options):
+                    if i < len(parsed.choices):
+                        parsed.choices[i].text = opt
+                    else:
+                        parsed.choices.append(
+                            Choice(id=f"c{i+1}", text=opt, alignment_delta=None)
+                        )
+
+            if final_stage:
+                break
+
+            if any(c.text for c in parsed.choices):
+                break
+
+            logger.warning(
+                "Empty choices on attempt %d/%d (turn %d). Retrying...",
+                attempt + 1, max_retries, current_turn,
+            )
+
+        return await self._finalize_turn(
+            session, session_id, choice_id, raw, current_turn, final_stage, parsed
+        )
 
     async def _finalize_turn(
         self,
@@ -245,15 +281,12 @@ class GameMaster:
         raw: str,
         current_turn: int,
         final_stage: bool,
+        parsed: Optional[LLMOutput] = None,
     ) -> ActionResponse:
         """Parse LLM output, apply alignment, store history, generate image."""
-        parsed = self._parser.parse(raw)
+        if parsed is None:
+            parsed = self._parser.parse(raw)
         last_choice_text = self._find_last_choice_text(session, choice_id)
-
-        if parsed.options:
-            for i, opt in enumerate(parsed.options):
-                if i < len(parsed.choices):
-                    parsed.choices[i].text = opt
 
         merged_delta: dict = {}
 
@@ -327,6 +360,10 @@ class GameMaster:
             logger.error("Image generation failed: %s", exc)
 
         stage_info = get_stage_config(current_turn)
+        logger.warning(
+            "_finalize_turn: is_ending=%s, choices=%d",
+            final_stage, len(parsed.choices),
+        )
         return ActionResponse(
             session_id=session_id,
             narrative=parsed.narrative,
@@ -436,6 +473,13 @@ class GameMaster:
         for c in last_entry.get("choices", []):
             if c.get("id") == choice_id:
                 return c.get("alignment_delta")
+        return None
+
+    @staticmethod
+    def _find_opening_choice_text(choice_id: str) -> Optional[str]:
+        for c in OPENING_CHOICES:
+            if c.id == choice_id:
+                return c.text
         return None
 
     @staticmethod

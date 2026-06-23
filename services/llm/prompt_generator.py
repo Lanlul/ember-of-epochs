@@ -69,6 +69,13 @@ def build_user_prompt(
     lines.append("")
     lines.append(WRITING_DIVERSITY)
 
+    lines.append("")
+    lines.append(
+        "【劇情推進絕對規則】禁止重複或改寫前一段故事中的場景設定、環境描述與事件。"
+        "你寫的 narrative 必須根據玩家的選擇明確推進到全新場景或情節發展，"
+        "禁止停留在相同或相似的地點與情境。"
+    )
+
     if is_final_stage:
         lines.append(f"\n{FINAL_STAGE_WARNING}")
         lines.append("\n請生成結局故事與繪圖提示詞。choices 陣列請留空（遊戲結束）。")
