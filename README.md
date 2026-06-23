@@ -153,7 +153,7 @@ pip install -r requirements.txt
 複製 `.env.example` 為 `.env`，依執行環境修改：
 
 ```bash
-cp ../.env.example .env
+cp .env.example .env
 ```
 
 **核心變數：**
